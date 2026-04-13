@@ -3,6 +3,8 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -42,12 +44,17 @@ func (m confirmModel) View() string {
 	if m.quitting {
 		return ""
 	}
-	return fmt.Sprintf("Are you sure you want to remove the workspace setup in %s? (y/n) ", repoDir)
+	return fmt.Sprintf("Remove the workspace setup for %s? This deletes %s and the managed assistant directories in the workspace. (y/n) ", repoDir, repoDir)
 }
 
 var deleteCmd = &cobra.Command{
 	Use:   "delete",
 	Short: "Remove the workspace setup (submodule and directories)",
+	Args:  cobra.NoArgs,
+	Example: strings.Join([]string{
+		"  skillzeug delete",
+		"  skillzeug delete --force --dir sec-skillz",
+	}, "\n"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if !force {
 			p := tea.NewProgram(confirmModel{})
@@ -70,22 +77,28 @@ func init() {
 	deleteCmd.Flags().BoolVarP(&force, "force", "f", false, "Force removal without confirmation")
 }
 
-func runDelete() error {
+func runDeleteInDir(workspaceDir string) error {
+	normalizedRepoDir, err := validateRepoDir(repoDir)
+	if err != nil {
+		return err
+	}
+	repoDir = normalizedRepoDir
+
 	// 1. Remove submodule
 	fmt.Printf("Removing submodule in %s...\n", repoDir)
-	
+
 	// git submodule deinit -f <repoDir>
-	if err := runCommand("git", "submodule", "deinit", "-f", repoDir); err != nil {
+	if err := runCommand(workspaceDir, "git", "submodule", "deinit", "-f", "--", repoDir); err != nil {
 		fmt.Printf("Warning: git submodule deinit failed: %v\n", err)
 	}
 
 	// git rm -f <repoDir>
-	if err := runCommand("git", "rm", "-f", repoDir); err != nil {
+	if err := runCommand(workspaceDir, "git", "rm", "-f", "--", repoDir); err != nil {
 		fmt.Printf("Warning: git rm failed: %v\n", err)
 	}
 
 	// Cleanup .git/modules/<repoDir>
-	gitModulesDir := fmt.Sprintf(".git/modules/%s", repoDir)
+	gitModulesDir := filepath.Join(workspaceDir, ".git", "modules", repoDir)
 	if _, err := os.Stat(gitModulesDir); err == nil {
 		fmt.Printf("Cleaning up %s...\n", gitModulesDir)
 		if err := os.RemoveAll(gitModulesDir); err != nil {
@@ -94,11 +107,11 @@ func runDelete() error {
 	}
 
 	// 2. Remove directories (which contain the symlinks)
-	dirs := []string{".gemini", ".codex", ".claude"}
-	for _, dir := range dirs {
-		if _, err := os.Stat(dir); err == nil {
+	for _, dir := range assistantDirs {
+		dirPath := filepath.Join(workspaceDir, dir)
+		if _, err := os.Stat(dirPath); err == nil {
 			fmt.Printf("Removing directory %s...\n", dir)
-			if err := os.RemoveAll(dir); err != nil {
+			if err := os.RemoveAll(dirPath); err != nil {
 				return fmt.Errorf("failed to remove directory %s: %w", dir, err)
 			}
 		}
@@ -106,4 +119,18 @@ func runDelete() error {
 
 	fmt.Println("Workspace cleanup complete!")
 	return nil
+}
+
+func runDelete() error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to determine current directory: %w", err)
+	}
+
+	workspaceDir, err := resolveWorkspaceDir(cwd)
+	if err != nil {
+		return err
+	}
+
+	return runDeleteInDir(workspaceDir)
 }

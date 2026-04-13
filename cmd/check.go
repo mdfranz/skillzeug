@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -12,6 +13,10 @@ import (
 var checkCmd = &cobra.Command{
 	Use:   "check",
 	Short: "Check system requirements and installed agents",
+	Args:  cobra.NoArgs,
+	Example: strings.Join([]string{
+		"  skillzeug check",
+	}, "\n"),
 	Run: func(cmd *cobra.Command, args []string) {
 		// 1. Check for git
 		_, err := exec.LookPath("git")
@@ -29,7 +34,7 @@ var checkCmd = &cobra.Command{
 		}
 
 		agents := []string{".codex", ".gemini", ".claude"}
-		fmt.Printf("Reviewing agents in %s:\n", homeDir)
+		fmt.Printf("Reviewing assistant directories in %s:\n", homeDir)
 		for _, agent := range agents {
 			agentPath := filepath.Join(homeDir, agent)
 			if _, err := os.Stat(agentPath); err == nil {

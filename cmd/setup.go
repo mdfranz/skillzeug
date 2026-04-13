@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -16,7 +15,6 @@ import (
 var (
 	interactive bool
 )
-
 
 type model struct {
 	inputs  []textinput.Model
@@ -88,6 +86,7 @@ func (m model) View() string {
 	}
 
 	b.WriteString("\n(ctrl+c to quit, enter to submit)\n")
+	b.WriteString("Tab and Shift+Tab move between fields. Press Enter on the last field to continue.\n")
 
 	return b.String()
 }
@@ -125,22 +124,12 @@ func initialModel() model {
 var setupCmd = &cobra.Command{
 	Use:   "setup",
 	Short: "Initialize workspace with submodules and symlinks",
+	Args:  cobra.NoArgs,
+	Example: strings.Join([]string{
+		"  skillzeug setup --repo git@github.com:org/skills.git",
+		"  skillzeug setup --repo https://github.com/org/skills.git --branch main --dir sec-skillz",
+	}, "\n"),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Check if it's a git repository
-		if _, err := os.Stat(".git"); os.IsNotExist(err) {
-			fmt.Print("Current directory is not a git repository. Would you like to run 'git init'? (y/n): ")
-			var response string
-			fmt.Scanln(&response)
-			if strings.ToLower(response) == "y" || strings.ToLower(response) == "yes" {
-				if err := runCommand("git", "init"); err != nil {
-					return fmt.Errorf("failed to initialize git repository: %w", err)
-				}
-				fmt.Println("[✓] Git repository initialized.")
-			} else {
-				return fmt.Errorf("git repository required for submodule setup")
-			}
-		}
-
 		if interactive || repoURL == "" {
 			p := tea.NewProgram(initialModel())
 			m, err := p.Run()
@@ -182,40 +171,62 @@ func init() {
 	setupCmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "Use interactive prompts for setup")
 }
 
-func runSetup() error {
+func runSetupInDir(workspaceDir string) error {
+	normalizedRepoDir, err := validateRepoDir(repoDir)
+	if err != nil {
+		return err
+	}
+	repoDir = normalizedRepoDir
+
 	// 1. Git submodule add
 	fmt.Printf("Adding submodule %s to %s...\n", repoURL, repoDir)
-	gitArgs := []string{"submodule", "add"}
-	if repoBranch != "" {
-		gitArgs = append(gitArgs, "-b", repoBranch)
+	submodulePath := filepath.Join(workspaceDir, repoDir)
+	submoduleConfigured, err := isConfiguredSubmodule(workspaceDir, repoDir)
+	if err != nil {
+		return fmt.Errorf("failed to inspect existing submodules: %w", err)
 	}
-	gitArgs = append(gitArgs, repoURL, repoDir)
 
-	if err := runCommand("git", gitArgs...); err != nil {
-		fmt.Printf("Warning: git submodule add failed (it may already exist): %v\n", err)
+	if _, err := os.Stat(submodulePath); err == nil && submoduleConfigured {
+		fmt.Printf("Submodule %s is already configured, skipping add.\n", repoDir)
+	} else {
+		if _, err := os.Stat(submodulePath); err == nil && !submoduleConfigured {
+			return fmt.Errorf("path %s already exists and is not a configured submodule; choose a different --dir or remove the existing path", repoDir)
+		} else if err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("failed to inspect submodule path %s: %w", repoDir, err)
+		}
+
+		gitArgs := []string{"submodule", "add"}
+		if repoBranch != "" {
+			gitArgs = append(gitArgs, "-b", repoBranch)
+		}
+		gitArgs = append(gitArgs, repoURL, repoDir)
+
+		if err := runCommand(workspaceDir, "git", gitArgs...); err != nil {
+			return fmt.Errorf("failed to add submodule %s at %s: %w", repoURL, repoDir, err)
+		}
 	}
 
 	// 2. Git submodule update
-	fmt.Println("Refreshing submodule...")
-	if err := runCommand("git", "submodule", "update", "--remote", "--merge"); err != nil {
+	fmt.Printf("Refreshing submodule %s...\n", repoDir)
+	if err := runCommand(workspaceDir, "git", "submodule", "update", "--remote", "--merge", "--", repoDir); err != nil {
 		return fmt.Errorf("failed to update submodule: %w", err)
 	}
 
 	// 3. Create directories
-	dirs := []string{".gemini", ".codex", ".claude"}
-	for _, dir := range dirs {
+	for _, dir := range assistantDirs {
 		fmt.Printf("Creating directory %s...\n", dir)
-		if err := os.MkdirAll(dir, 0755); err != nil {
+		dirPath := filepath.Join(workspaceDir, dir)
+		if err := os.MkdirAll(dirPath, 0755); err != nil {
 			return fmt.Errorf("failed to create directory %s: %w", dir, err)
 		}
 
 		// 4. Create symlinks
-		skillPath := filepath.Join(dir, "skills")
+		skillPath := filepath.Join(dirPath, "skills")
 		targetPath := filepath.Join("..", repoDir, "skills")
 
-		// Check if symlink already exists
+		// Replace any existing skills link or file in the managed assistant directory.
 		if _, err := os.Lstat(skillPath); err == nil {
-			fmt.Printf("Symlink %s already exists, removing...\n", skillPath)
+			fmt.Printf("Replacing existing %s...\n", skillPath)
 			if err := os.Remove(skillPath); err != nil {
 				return fmt.Errorf("failed to remove existing symlink %s: %w", skillPath, err)
 			}
@@ -227,13 +238,32 @@ func runSetup() error {
 		}
 	}
 
-	fmt.Println("Workspace setup complete!")
+	fmt.Printf("Workspace setup complete in %s.\n", workspaceDir)
+	fmt.Println("Run 'skillzeug show' to inspect the current configuration.")
 	return nil
 }
 
-func runCommand(name string, args ...string) error {
-	cmd := exec.Command(name, args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+func runSetup() error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to determine current directory: %w", err)
+	}
+
+	workspaceDir, err := gitTopLevel(cwd)
+	if err != nil {
+		fmt.Print("Current directory is not inside a Git repository. Run 'git init' here and continue? (y/n): ")
+		var response string
+		fmt.Scanln(&response)
+		if strings.ToLower(response) == "y" || strings.ToLower(response) == "yes" {
+			if err := runCommand(cwd, "git", "init"); err != nil {
+				return fmt.Errorf("failed to initialize git repository: %w", err)
+			}
+			fmt.Println("[✓] Git repository initialized.")
+			workspaceDir = cwd
+		} else {
+			return fmt.Errorf("git repository required for submodule setup")
+		}
+	}
+
+	return runSetupInDir(workspaceDir)
 }

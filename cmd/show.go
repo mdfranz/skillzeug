@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -11,6 +12,11 @@ import (
 var showCmd = &cobra.Command{
 	Use:   "show",
 	Short: "Show current workspace configuration and status",
+	Args:  cobra.NoArgs,
+	Example: strings.Join([]string{
+		"  skillzeug show",
+		"  skillzeug show --dir sec-skillz",
+	}, "\n"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runShow()
 	},
@@ -21,15 +27,24 @@ func init() {
 	showCmd.Flags().StringVarP(&repoDir, "dir", "d", "sec-skillz", "Directory for the submodule")
 }
 
-func runShow() error {
+func runShowInDir(workspaceDir string) error {
+	normalizedRepoDir, err := validateRepoDir(repoDir)
+	if err != nil {
+		return err
+	}
+	repoDir = normalizedRepoDir
+
 	fmt.Println("Workspace Configuration Status:")
 	fmt.Println("-------------------------------")
+	fmt.Printf("Workspace root: %s\n", workspaceDir)
+	fmt.Printf("Managed submodule: %s\n\n", repoDir)
 
 	// 1. Check Submodule
-	if info, err := os.Stat(repoDir); err == nil && info.IsDir() {
+	submodulePath := filepath.Join(workspaceDir, repoDir)
+	if info, err := os.Stat(submodulePath); err == nil && info.IsDir() {
 		fmt.Printf("[✓] Submodule directory: %s\n", repoDir)
 		// Check for skills subdir
-		skillsPath := filepath.Join(repoDir, "skills")
+		skillsPath := filepath.Join(submodulePath, "skills")
 		if sInfo, sErr := os.Stat(skillsPath); sErr == nil && sInfo.IsDir() {
 			fmt.Println("    [✓] Skills directory found")
 		} else {
@@ -40,19 +55,19 @@ func runShow() error {
 	}
 
 	// 2. Check Assistant Directories and Symlinks
-	dirs := []string{".gemini", ".codex", ".claude"}
-	for _, dir := range dirs {
-		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+	for _, dir := range assistantDirs {
+		dirPath := filepath.Join(workspaceDir, dir)
+		if info, err := os.Stat(dirPath); err == nil && info.IsDir() {
 			fmt.Printf("[✓] Assistant directory: %s\n", dir)
-			
-			skillPath := filepath.Join(dir, "skills")
+
+			skillPath := filepath.Join(dirPath, "skills")
 			lInfo, err := os.Lstat(skillPath)
 			if err != nil {
 				fmt.Printf("    [ ] Symlink 'skills': NOT FOUND\n")
 			} else if lInfo.Mode()&os.ModeSymlink != 0 {
 				target, _ := os.Readlink(skillPath)
 				fmt.Printf("    [✓] Symlink 'skills' -> %s\n", target)
-				
+
 				// Check if target is valid
 				if _, err := os.Stat(skillPath); err == nil {
 					fmt.Println("        [✓] Symlink target is VALID")
@@ -68,4 +83,18 @@ func runShow() error {
 	}
 
 	return nil
+}
+
+func runShow() error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to determine current directory: %w", err)
+	}
+
+	workspaceDir, err := resolveWorkspaceDir(cwd)
+	if err != nil {
+		return err
+	}
+
+	return runShowInDir(workspaceDir)
 }

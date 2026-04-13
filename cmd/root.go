@@ -13,9 +13,11 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "skillzeug",
-	Short: "Skillzeug is a CLI tool for workspace setup",
-	Long:  `A Golang CLI tool that implements workspace setup based on sec-skillz requirements.`,
+	Use:           "skillzeug",
+	Short:         "Manage workspace skill submodules and assistant directories",
+	Long:          `Skillzeug configures a workspace by adding a skills repository as a Git submodule and wiring assistant-specific directories to that shared skills tree.`,
+	SilenceUsage:  true,
+	SilenceErrors: true,
 }
 
 func Execute() {
