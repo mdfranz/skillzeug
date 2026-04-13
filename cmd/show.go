@@ -52,6 +52,7 @@ func runShowInDir(workspaceDir string) error {
 		}
 	} else {
 		fmt.Printf("[ ] Submodule directory: %s (NOT FOUND)\n", repoDir)
+		fmt.Printf("    Run 'skillzeug init' to initialize\n")
 	}
 
 	// 2. Check Assistant Directories and Symlinks
@@ -73,6 +74,7 @@ func runShowInDir(workspaceDir string) error {
 					fmt.Println("        [✓] Symlink target is VALID")
 				} else {
 					fmt.Println("        [!] Symlink target is BROKEN")
+					fmt.Println("            Run 'skillzeug update' to repair")
 				}
 			} else {
 				fmt.Printf("    [!] 'skills' exists but is NOT a symlink\n")

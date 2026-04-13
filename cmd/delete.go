@@ -11,7 +11,8 @@ import (
 )
 
 var (
-	force bool
+	force      bool
+	pruneDirs  bool
 )
 
 type confirmModel struct {
@@ -44,12 +45,15 @@ func (m confirmModel) View() string {
 	if m.quitting {
 		return ""
 	}
-	return fmt.Sprintf("Remove the workspace setup for %s? This deletes %s and the managed assistant directories in the workspace. (y/n) ", repoDir, repoDir)
+	if pruneDirs {
+		return fmt.Sprintf("Remove the workspace initialization for %s? This will delete %s and the assistant directories (.codex, .gemini, .claude). (y/n) ", repoDir, repoDir)
+	}
+	return fmt.Sprintf("Remove the workspace initialization for %s? This will delete %s and the 'skills' symlinks in assistant directories. (y/n) ", repoDir, repoDir)
 }
 
 var deleteCmd = &cobra.Command{
 	Use:   "delete",
-	Short: "Remove the workspace setup (submodule and directories)",
+	Short: "Remove the workspace initialization (submodule and directories)",
 	Args:  cobra.NoArgs,
 	Example: strings.Join([]string{
 		"  skillzeug delete",
@@ -75,6 +79,8 @@ func init() {
 	rootCmd.AddCommand(deleteCmd)
 	deleteCmd.Flags().StringVarP(&repoDir, "dir", "d", "sec-skillz", "Directory of the submodule to remove")
 	deleteCmd.Flags().BoolVarP(&force, "force", "f", false, "Force removal without confirmation")
+	deleteCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview changes without making them")
+	deleteCmd.Flags().BoolVar(&pruneDirs, "prune-dirs", false, "Also remove assistant directories (.codex, .gemini, .claude)")
 }
 
 func runDeleteInDir(workspaceDir string) error {
@@ -88,36 +94,73 @@ func runDeleteInDir(workspaceDir string) error {
 	fmt.Printf("Removing submodule in %s...\n", repoDir)
 
 	// git submodule deinit -f <repoDir>
-	if err := runCommand(workspaceDir, "git", "submodule", "deinit", "-f", "--", repoDir); err != nil {
-		fmt.Printf("Warning: git submodule deinit failed: %v\n", err)
-	}
+	if !dryRun {
+		if err := runCommand(workspaceDir, "git", "submodule", "deinit", "-f", "--", repoDir); err != nil {
+			fmt.Printf("Warning: git submodule deinit failed: %v\n", err)
+		}
 
-	// git rm -f <repoDir>
-	if err := runCommand(workspaceDir, "git", "rm", "-f", "--", repoDir); err != nil {
-		fmt.Printf("Warning: git rm failed: %v\n", err)
+		// git rm -f <repoDir>
+		if err := runCommand(workspaceDir, "git", "rm", "-f", "--", repoDir); err != nil {
+			fmt.Printf("Warning: git rm failed: %v\n", err)
+		}
+	} else {
+		fmt.Printf("[dry-run] would run: git submodule deinit -f -- %s\n", repoDir)
+		fmt.Printf("[dry-run] would run: git rm -f -- %s\n", repoDir)
 	}
 
 	// Cleanup .git/modules/<repoDir>
 	gitModulesDir := filepath.Join(workspaceDir, ".git", "modules", repoDir)
 	if _, err := os.Stat(gitModulesDir); err == nil {
 		fmt.Printf("Cleaning up %s...\n", gitModulesDir)
-		if err := os.RemoveAll(gitModulesDir); err != nil {
-			fmt.Printf("Warning: failed to remove %s: %v\n", gitModulesDir, err)
+		if !dryRun {
+			if err := os.RemoveAll(gitModulesDir); err != nil {
+				fmt.Printf("Warning: failed to remove %s: %v\n", gitModulesDir, err)
+			}
+		} else {
+			fmt.Printf("[dry-run] would remove: %s\n", gitModulesDir)
 		}
 	}
 
-	// 2. Remove directories (which contain the symlinks)
-	for _, dir := range assistantDirs {
-		dirPath := filepath.Join(workspaceDir, dir)
-		if _, err := os.Stat(dirPath); err == nil {
-			fmt.Printf("Removing directory %s...\n", dir)
-			if err := os.RemoveAll(dirPath); err != nil {
-				return fmt.Errorf("failed to remove directory %s: %w", dir, err)
+	// 2. Remove 'skills' symlinks or entire directories based on --prune-dirs
+	if pruneDirs {
+		// Remove entire directories (old behavior)
+		for _, dir := range assistantDirs {
+			dirPath := filepath.Join(workspaceDir, dir)
+			if _, err := os.Stat(dirPath); err == nil {
+				fmt.Printf("Removing directory %s...\n", dir)
+				if !dryRun {
+					if err := os.RemoveAll(dirPath); err != nil {
+						return fmt.Errorf("failed to remove directory %s: %w", dir, err)
+					}
+				} else {
+					fmt.Printf("[dry-run] would remove: %s\n", dirPath)
+				}
+			}
+		}
+	} else {
+		// Remove only 'skills' symlinks (new safe behavior)
+		for _, dir := range assistantDirs {
+			skillPath := filepath.Join(workspaceDir, dir, "skills")
+			if _, err := os.Lstat(skillPath); err == nil {
+				fmt.Printf("Removing symlink %s...\n", skillPath)
+				if !dryRun {
+					if err := os.Remove(skillPath); err != nil {
+						return fmt.Errorf("failed to remove symlink %s: %w", skillPath, err)
+					}
+				} else {
+					fmt.Printf("[dry-run] would remove: %s\n", skillPath)
+				}
+			} else if !os.IsNotExist(err) {
+				fmt.Printf("Warning: could not check symlink %s: %v\n", skillPath, err)
 			}
 		}
 	}
 
-	fmt.Println("Workspace cleanup complete!")
+	if dryRun {
+		fmt.Println("\n[dry-run] Cleanup complete. No changes made.")
+	} else {
+		fmt.Println("Workspace cleanup complete!")
+	}
 	return nil
 }
 

@@ -11,6 +11,8 @@ import (
 
 var assistantDirs = []string{".gemini", ".codex", ".claude"}
 
+var dryRun bool
+
 var runCommand = realRunCommand
 
 var runCommandOutput = realRunCommandOutput
@@ -42,10 +44,35 @@ func realRunCommandOutput(dir string, name string, args ...string) ([]byte, erro
 	return stdout.Bytes(), nil
 }
 
+func validateRepoURL(url string) error {
+	trimmed := strings.TrimSpace(url)
+	if trimmed == "" {
+		return fmt.Errorf("repo URL is required; use --repo or run without flags for interactive mode")
+	}
+	if strings.ContainsRune(trimmed, '\x00') || strings.ContainsRune(trimmed, '\n') {
+		return fmt.Errorf("repo URL contains invalid characters")
+	}
+
+	// Check for valid git URL schemes
+	validSchemes := []string{"https://", "http://", "git@", "ssh://", "git://", "file://"}
+	hasValidScheme := false
+	for _, scheme := range validSchemes {
+		if strings.HasPrefix(trimmed, scheme) {
+			hasValidScheme = true
+			break
+		}
+	}
+	if !hasValidScheme {
+		return fmt.Errorf("repo URL must start with https://, http://, git@, ssh://, git://, or file://")
+	}
+
+	return nil
+}
+
 func validateRepoDir(dir string) (string, error) {
 	cleaned := filepath.Clean(strings.TrimSpace(dir))
 	if cleaned == "." || cleaned == "" {
-		return "", fmt.Errorf("repo directory is required")
+		return "", fmt.Errorf("repo directory is required (use --dir or accept the default 'sec-skillz')")
 	}
 	if filepath.IsAbs(cleaned) {
 		return "", fmt.Errorf("repo directory must be relative: %s", dir)
@@ -72,7 +99,7 @@ func resolveWorkspaceDir(cwd string) (string, error) {
 		return root, nil
 	}
 
-	return cwd, nil
+	return "", fmt.Errorf("not inside a git repository; run 'git init' first or 'skillzeug init' to initialize one")
 }
 
 func isConfiguredSubmodule(workspaceDir string, submoduleDir string) (bool, error) {

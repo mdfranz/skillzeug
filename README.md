@@ -5,27 +5,27 @@ Skillzeug is a Go CLI for setting up a shared `skills/` tree in a workspace. It 
 ## What it does
 
 - Adds a skills repository as a Git submodule.
-- Refreshes only the managed submodule during setup.
+- Refreshes only the managed submodule during initialization.
 - Creates `.codex`, `.gemini`, and `.claude` in the workspace.
 - Creates a `skills` symlink in each assistant directory that points at the shared submodule.
-- Resolves the workspace root from anywhere inside the Git repository, so `setup`, `show`, and `delete` can be run from subdirectories.
+- Resolves the workspace root from anywhere inside the Git repository, so `init`, `show`, and `delete` can be run from subdirectories.
 
 ## Commands
 
-### `setup`
+### `init`
 
 Initializes the workspace. If `--repo` is omitted, Skillzeug opens an interactive prompt.
 
 ```bash
-skillzeug setup --repo git@github.com:org/skills.git
-skillzeug setup --repo https://github.com/org/skills.git --branch main --dir sec-skillz
+skillzeug init --repo git@github.com:org/skills.git
+skillzeug init --repo https://github.com/org/skills.git --branch main --dir sec-skillz
 ```
 
 Notes:
 
 - If the current directory is not inside a Git repository, Skillzeug offers to run `git init`.
-- If the target submodule path already exists and is not a configured submodule, setup stops with an error instead of silently continuing.
-- Existing `skills` entries inside the managed assistant directories are replaced during setup.
+- If the target submodule path already exists and is not a configured submodule, initialization stops with an error instead of silently continuing.
+- Existing `skills` entries inside the managed assistant directories are replaced during initialization.
 
 ### `show`
 
@@ -48,7 +48,7 @@ This command intentionally inspects the home directory, not the current reposito
 
 ### `delete`
 
-Removes the managed submodule and deletes the workspace assistant directories created for the setup.
+Removes the managed submodule and deletes the workspace assistant directories created for the initialization.
 
 ```bash
 skillzeug delete
@@ -75,4 +75,4 @@ make test
 make build
 ```
 
-The test suite covers path validation, setup failure handling, scoped submodule updates, and workspace-root resolution.
+The test suite covers path validation, initialization failure handling, scoped submodule updates, and workspace-root resolution.

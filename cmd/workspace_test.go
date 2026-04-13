@@ -62,7 +62,7 @@ func TestRunDeleteInDirRejectsUnsafeRepoDir(t *testing.T) {
 	}
 }
 
-func TestRunSetupInDirFailsWhenSubmoduleAddFails(t *testing.T) {
+func TestRunInitInDirFailsWhenSubmoduleAddFails(t *testing.T) {
 	restore := stubCommandFns(
 		func(_ string, name string, args ...string) error {
 			if name == "git" && len(args) >= 2 && args[0] == "submodule" && args[1] == "add" {
@@ -81,9 +81,9 @@ func TestRunSetupInDirFailsWhenSubmoduleAddFails(t *testing.T) {
 	repoDir = "sec-skillz"
 
 	workspaceDir := t.TempDir()
-	err := runSetupInDir(workspaceDir)
+	err := runInitInDir(workspaceDir)
 	if err == nil {
-		t.Fatal("expected setup to fail when submodule add fails")
+		t.Fatal("expected initialization to fail when submodule add fails")
 	}
 	if !strings.Contains(err.Error(), "failed to add submodule") {
 		t.Fatalf("unexpected error: %v", err)
@@ -91,12 +91,12 @@ func TestRunSetupInDirFailsWhenSubmoduleAddFails(t *testing.T) {
 
 	for _, dir := range assistantDirs {
 		if _, statErr := os.Stat(filepath.Join(workspaceDir, dir)); !os.IsNotExist(statErr) {
-			t.Fatalf("assistant dir %s should not be created on setup failure", dir)
+			t.Fatalf("assistant dir %s should not be created on initialization failure", dir)
 		}
 	}
 }
 
-func TestRunSetupInDirSkipsExistingSubmoduleAndScopesUpdate(t *testing.T) {
+func TestRunInitInDirSkipsExistingSubmoduleAndScopesUpdate(t *testing.T) {
 	var commands []string
 	restore := stubCommandFns(
 		func(_ string, name string, args ...string) error {
@@ -121,13 +121,13 @@ func TestRunSetupInDirSkipsExistingSubmoduleAndScopesUpdate(t *testing.T) {
 		t.Fatalf("failed to create submodule dir: %v", err)
 	}
 
-	if err := runSetupInDir(workspaceDir); err != nil {
-		t.Fatalf("setup failed: %v", err)
+	if err := runInitInDir(workspaceDir); err != nil {
+		t.Fatalf("initialization failed: %v", err)
 	}
 
 	for _, command := range commands {
 		if strings.Contains(command, "submodule add") {
-			t.Fatalf("setup should not add an already configured submodule: %v", commands)
+			t.Fatalf("initialization should not add an already configured submodule: %v", commands)
 		}
 	}
 
@@ -172,6 +172,60 @@ func TestResolveWorkspaceDirUsesGitTopLevel(t *testing.T) {
 	}
 	if got != rootDir {
 		t.Fatalf("got %q, want %q", got, rootDir)
+	}
+}
+
+func TestResolveWorkspaceDirReturnsErrorWhenGitFails(t *testing.T) {
+	workDir := t.TempDir()
+
+	restore := stubCommandFns(
+		func(string, string, ...string) error {
+			return errors.New("git not found")
+		},
+		func(string, string, ...string) ([]byte, error) {
+			return nil, errors.New("git not found")
+		},
+	)
+	defer restore()
+
+	_, err := resolveWorkspaceDir(workDir)
+	if err == nil {
+		t.Fatal("expected resolveWorkspaceDir to return error when git fails")
+	}
+	if !strings.Contains(err.Error(), "not inside a git repository") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
+}
+
+func TestValidateRepoURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{name: "accepts https URL", input: "https://github.com/org/repo.git", wantErr: false},
+		{name: "accepts http URL", input: "http://github.com/org/repo.git", wantErr: false},
+		{name: "accepts git@ SSH", input: "git@github.com:org/repo.git", wantErr: false},
+		{name: "accepts ssh:// URL", input: "ssh://git@github.com/org/repo.git", wantErr: false},
+		{name: "accepts git:// URL", input: "git://github.com/org/repo.git", wantErr: false},
+		{name: "accepts file:// URL", input: "file:///path/to/repo.git", wantErr: false},
+		{name: "rejects empty URL", input: "", wantErr: true},
+		{name: "rejects invalid scheme", input: "ftp://github.com/repo.git", wantErr: true},
+		{name: "rejects URL with null byte", input: "https://github.com/repo\x00.git", wantErr: true},
+		{name: "rejects URL with newline", input: "https://github.com/repo\n.git", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		err := validateRepoURL(tt.input)
+		if tt.wantErr {
+			if err == nil {
+				t.Fatalf("%s: expected error, got nil", tt.name)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%s: unexpected error: %v", tt.name, err)
+		}
 	}
 }
 
