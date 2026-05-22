@@ -46,7 +46,7 @@ func (m confirmModel) View() string {
 		return ""
 	}
 	if pruneDirs {
-		return fmt.Sprintf("Remove the workspace initialization for %s? This will delete %s and the assistant directories (.codex, .gemini, .claude). (y/n) ", repoDir, repoDir)
+		return fmt.Sprintf("Remove the workspace initialization for %s? This will delete %s and the assistant directories (.codex, .gemini, .claude, .agents). (y/n) ", repoDir, repoDir)
 	}
 	return fmt.Sprintf("Remove the workspace initialization for %s? This will delete %s and the 'skills' symlinks in assistant directories. (y/n) ", repoDir, repoDir)
 }
@@ -80,7 +80,7 @@ func init() {
 	deleteCmd.Flags().StringVarP(&repoDir, "dir", "d", "sec-skillz", "Directory of the submodule to remove")
 	deleteCmd.Flags().BoolVarP(&force, "force", "f", false, "Force removal without confirmation")
 	deleteCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview changes without making them")
-	deleteCmd.Flags().BoolVar(&pruneDirs, "prune-dirs", false, "Also remove assistant directories (.codex, .gemini, .claude)")
+	deleteCmd.Flags().BoolVar(&pruneDirs, "prune-dirs", false, "Also remove assistant directories (.codex, .gemini, .claude, .agents)")
 }
 
 func runDeleteInDir(workspaceDir string) error {

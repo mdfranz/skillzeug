@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-var assistantDirs = []string{".gemini", ".codex", ".claude"}
+var assistantDirs = []string{".gemini", ".codex", ".claude", ".agents"}
 
 var dryRun bool
 

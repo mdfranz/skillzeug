@@ -26,3 +26,6 @@ skillzeug
 # OS files
 .DS_Store
 Thumbs.db
+
+.antigravitycli/
+.gemini/

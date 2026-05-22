@@ -33,7 +33,7 @@ var checkCmd = &cobra.Command{
 			return
 		}
 
-		agents := []string{".codex", ".gemini", ".claude"}
+		agents := []string{".codex", ".gemini", ".claude", ".agents"}
 		fmt.Printf("Reviewing assistant directories in %s:\n", homeDir)
 		for _, agent := range agents {
 			agentPath := filepath.Join(homeDir, agent)

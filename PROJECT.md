@@ -22,3 +22,8 @@ Development phases and feature evolution of `skillzeug`.
 
 ## Phase 5: Consistency & Refactoring
 - **Command Renaming:** Renamed the `setup` command to `init` to better align with common CLI conventions (e.g., `git init`, `npm init`).
+
+## Phase 6: Expansion & Maintenance
+- **New Command:** Added the `update` command to refresh submodules and repair symlinks.
+- **Agent Support:** Expanded support to include the `.agents` assistant directory across all commands.
+- **Safety Improvements:** Modified the `delete` command to only remove `skills` symlinks by default, introducing the `--prune-dirs` flag for complete directory removal.
