@@ -12,16 +12,20 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
+var initOpts struct {
+	repoURL     string
+	repoBranch  string
+	repoDir     string
 	interactive bool
-)
+	dryRun      bool
+}
 
 type model struct {
-	inputs     []textinput.Model
-	focused    int
-	err        error
-	done       bool
-	urlErr     string
+	inputs  []textinput.Model
+	focused int
+	err     error
+	done    bool
+	urlErr  string
 }
 
 type gitInitConfirmModel struct {
@@ -138,7 +142,7 @@ func (m model) View() string {
 	return b.String()
 }
 
-func initialModel() model {
+func initialModel(url, branch, dir string) model {
 	m := model{
 		inputs: make([]textinput.Model, 3),
 	}
@@ -153,13 +157,17 @@ func initialModel() model {
 		case 0:
 			t.Placeholder = "Repo URL (required)"
 			t.Focus()
-			t.SetValue(repoURL)
+			t.SetValue(url)
 		case 1:
 			t.Placeholder = "Branch (main)"
-			t.SetValue(repoBranch)
+			t.SetValue(branch)
 		case 2:
 			t.Placeholder = "Submodule Directory (sec-skillz)"
-			t.SetValue(repoDir)
+			if dir == "" {
+				t.SetValue("sec-skillz")
+			} else {
+				t.SetValue(dir)
+			}
 		}
 
 		m.inputs[i] = t
@@ -177,8 +185,11 @@ var initCmd = &cobra.Command{
 		"  skillzeug init --repo https://github.com/org/skills.git --branch main --dir sec-skillz",
 	}, "\n"),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if interactive || repoURL == "" {
-			p := tea.NewProgram(initialModel())
+		if initOpts.interactive || initOpts.repoURL == "" {
+			if !isInputTerminal() {
+				return fmt.Errorf("repo URL is required; use --repo in non-interactive environments")
+			}
+			p := tea.NewProgram(initialModel(initOpts.repoURL, initOpts.repoBranch, initOpts.repoDir))
 			m, err := p.Run()
 			if err != nil {
 				return err
@@ -187,13 +198,13 @@ var initCmd = &cobra.Command{
 			finalModel := m.(model)
 			if finalModel.done {
 				if finalModel.inputs[0].Value() != "" {
-					repoURL = finalModel.inputs[0].Value()
+					initOpts.repoURL = finalModel.inputs[0].Value()
 				}
 				if finalModel.inputs[1].Value() != "" {
-					repoBranch = finalModel.inputs[1].Value()
+					initOpts.repoBranch = finalModel.inputs[1].Value()
 				}
 				if finalModel.inputs[2].Value() != "" {
-					repoDir = finalModel.inputs[2].Value()
+					initOpts.repoDir = finalModel.inputs[2].Value()
 				}
 			} else {
 				fmt.Println("Initialization cancelled.")
@@ -201,127 +212,49 @@ var initCmd = &cobra.Command{
 			}
 		}
 
-		if repoURL == "" {
+		if initOpts.repoURL == "" {
 			return fmt.Errorf("repo URL is required; use --repo or run without flags for interactive mode")
 		}
 
 		// Validate URL before proceeding
-		if err := validateRepoURL(repoURL); err != nil {
+		if err := validateRepoURL(initOpts.repoURL); err != nil {
 			return err
 		}
 
-		return runInit()
+		cwd, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("failed to determine current directory: %w", err)
+		}
+
+		ws := NewWorkspace("")
+		ws.RepoURL = initOpts.repoURL
+		ws.RepoBranch = initOpts.repoBranch
+		ws.RepoDir = initOpts.repoDir
+		ws.Interactive = initOpts.interactive
+		ws.DryRun = initOpts.dryRun
+
+		return ws.Init(cwd)
 	},
 }
 
 func init() {
 	rootCmd.AddCommand(initCmd)
 
-	initCmd.Flags().StringVarP(&repoURL, "repo", "r", "", "Git repository URL for skills")
-	initCmd.Flags().StringVarP(&repoBranch, "branch", "b", "", "Git branch to use for submodule")
-	initCmd.Flags().StringVarP(&repoDir, "dir", "d", "sec-skillz", "Directory for the submodule")
-	initCmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "Use interactive prompts for initialization")
-	initCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview changes without making them")
+	initCmd.Flags().StringVarP(&initOpts.repoURL, "repo", "r", "", "Git repository URL for skills")
+	initCmd.Flags().StringVarP(&initOpts.repoBranch, "branch", "b", "", "Git branch to use for submodule")
+	initCmd.Flags().StringVarP(&initOpts.repoDir, "dir", "d", "sec-skillz", "Directory for the submodule")
+	initCmd.Flags().BoolVarP(&initOpts.interactive, "interactive", "i", false, "Use interactive prompts for initialization")
+	initCmd.Flags().BoolVar(&initOpts.dryRun, "dry-run", false, "Preview changes without making them")
 }
 
-func runInitInDir(workspaceDir string) error {
-	normalizedRepoDir, err := validateRepoDir(repoDir)
+// Init resolves the workspace root and executes the initialization sequence.
+func (w *Workspace) Init(cwd string) error {
+	workspaceDir, err := w.gitTopLevel(cwd)
 	if err != nil {
-		return err
-	}
-	repoDir = normalizedRepoDir
-
-	// 1. Git submodule add
-	fmt.Printf("Adding submodule %s to %s...\n", repoURL, repoDir)
-	submodulePath := filepath.Join(workspaceDir, repoDir)
-	submoduleConfigured, err := isConfiguredSubmodule(workspaceDir, repoDir)
-	if err != nil {
-		return fmt.Errorf("failed to inspect existing submodules: %w", err)
-	}
-
-	if _, err := os.Stat(submodulePath); err == nil && submoduleConfigured {
-		fmt.Printf("Submodule %s is already configured, skipping add.\n", repoDir)
-	} else {
-		if _, err := os.Stat(submodulePath); err == nil && !submoduleConfigured {
-			return fmt.Errorf("path %s already exists and is not a configured submodule; choose a different --dir or remove the existing path", repoDir)
-		} else if err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("failed to inspect submodule path %s: %w", repoDir, err)
+		if !isInputTerminal() {
+			return fmt.Errorf("not inside a git repository; run 'git init' first or run in an interactive terminal to initialize one")
 		}
 
-		gitArgs := []string{"submodule", "add"}
-		if repoBranch != "" {
-			gitArgs = append(gitArgs, "-b", repoBranch)
-		}
-		gitArgs = append(gitArgs, repoURL, repoDir)
-
-		if dryRun {
-			fmt.Printf("[dry-run] would run: git %s\n", strings.Join(gitArgs, " "))
-		} else {
-			if err := runCommand(workspaceDir, "git", gitArgs...); err != nil {
-				return fmt.Errorf("failed to add submodule %s at %s: %w\nCheck the repo URL is correct and you have network access", repoURL, repoDir, err)
-			}
-		}
-	}
-
-	// 2. Git submodule update
-	fmt.Printf("Refreshing submodule %s...\n", repoDir)
-	if dryRun {
-		fmt.Printf("[dry-run] would run: git submodule update --remote --merge -- %s\n", repoDir)
-	} else {
-		if err := runCommand(workspaceDir, "git", "submodule", "update", "--remote", "--merge", "--", repoDir); err != nil {
-			return fmt.Errorf("failed to update submodule: %w", err)
-		}
-	}
-
-	// 3. Create directories and symlinks
-	for _, dir := range assistantDirs {
-		fmt.Printf("Creating directory %s...\n", dir)
-		dirPath := filepath.Join(workspaceDir, dir)
-		if !dryRun {
-			if err := os.MkdirAll(dirPath, 0755); err != nil {
-				return fmt.Errorf("failed to create directory %s: %w", dir, err)
-			}
-		}
-
-		// 4. Create symlinks
-		skillPath := filepath.Join(dirPath, "skills")
-		targetPath := filepath.Join("..", repoDir, "skills")
-
-		// Replace any existing skills link or file in the managed assistant directory.
-		if _, err := os.Lstat(skillPath); err == nil {
-			fmt.Printf("Replacing existing %s...\n", skillPath)
-			if !dryRun {
-				if err := os.Remove(skillPath); err != nil {
-					return fmt.Errorf("failed to remove existing symlink %s: %w", skillPath, err)
-				}
-			}
-		}
-
-		fmt.Printf("Creating symlink %s -> %s\n", skillPath, targetPath)
-		if !dryRun {
-			if err := os.Symlink(targetPath, skillPath); err != nil {
-				return fmt.Errorf("failed to create symlink %s: %w", skillPath, err)
-			}
-		}
-	}
-
-	if dryRun {
-		fmt.Println("\n[dry-run] Initialization complete. No changes made.")
-	} else {
-		fmt.Printf("Workspace initialization complete in %s.\n", workspaceDir)
-		fmt.Println("Run 'skillzeug show' to inspect the current configuration.")
-	}
-	return nil
-}
-
-func runInit() error {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("failed to determine current directory: %w", err)
-	}
-
-	workspaceDir, err := gitTopLevel(cwd)
-	if err != nil {
 		p := tea.NewProgram(gitInitConfirmModel{})
 		m, err := p.Run()
 		if err != nil {
@@ -331,16 +264,93 @@ func runInit() error {
 			return fmt.Errorf("git repository required for submodule initialization")
 		}
 
-		if dryRun {
-			fmt.Println("[dry-run] would run: git init")
-		} else {
-			if err := runCommand(cwd, "git", "init"); err != nil {
-				return fmt.Errorf("failed to initialize git repository: %w\nCheck that 'git' is installed and you have write permission to this directory", err)
-			}
+		if err := w.runCommand(cwd, "git", "init"); err != nil {
+			return fmt.Errorf("failed to initialize git repository: %w\nCheck that 'git' is installed and you have write permission to this directory", err)
+		}
+		if !w.DryRun {
 			fmt.Println("[✓] Git repository initialized.")
 		}
 		workspaceDir = cwd
 	}
 
-	return runInitInDir(workspaceDir)
+	w.Path = workspaceDir
+	return w.InitInDir(workspaceDir)
+}
+
+// InitInDir initializes the submodule and assistant symlinks in the designated workspace directory.
+func (w *Workspace) InitInDir(workspaceDir string) error {
+	normalizedRepoDir, err := validateRepoDir(w.RepoDir)
+	if err != nil {
+		return err
+	}
+	w.RepoDir = normalizedRepoDir
+
+	// 1. Git submodule add
+	fmt.Printf("Adding submodule %s to %s...\n", w.RepoURL, w.RepoDir)
+	submodulePath := filepath.Join(workspaceDir, w.RepoDir)
+	submoduleConfigured, err := w.isConfiguredSubmodule(workspaceDir, w.RepoDir)
+	if err != nil {
+		return fmt.Errorf("failed to inspect existing submodules: %w", err)
+	}
+
+	if _, err := os.Stat(submodulePath); err == nil && submoduleConfigured {
+		fmt.Printf("Submodule %s is already configured, skipping add.\n", w.RepoDir)
+	} else {
+		if _, err := os.Stat(submodulePath); err == nil && !submoduleConfigured {
+			return fmt.Errorf("path %s already exists and is not a configured submodule; choose a different --dir or remove the existing path", w.RepoDir)
+		} else if err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("failed to inspect submodule path %s: %w", w.RepoDir, err)
+		}
+
+		gitArgs := []string{"submodule", "add"}
+		if w.RepoBranch != "" {
+			gitArgs = append(gitArgs, "-b", w.RepoBranch)
+		}
+		gitArgs = append(gitArgs, w.RepoURL, w.RepoDir)
+
+		if err := w.runCommand(workspaceDir, "git", gitArgs...); err != nil {
+			return fmt.Errorf("failed to add submodule %s at %s: %w\nCheck the repo URL is correct and you have network access", w.RepoURL, w.RepoDir, err)
+		}
+	}
+
+	// 2. Git submodule update
+	fmt.Printf("Refreshing submodule %s...\n", w.RepoDir)
+	if err := w.runCommand(workspaceDir, "git", "submodule", "update", "--remote", "--merge", "--", w.RepoDir); err != nil {
+		return fmt.Errorf("failed to update submodule: %w", err)
+	}
+
+	// 3. Create directories and symlinks
+	for _, dir := range assistantDirs {
+		fmt.Printf("Creating directory %s...\n", dir)
+		dirPath := filepath.Join(workspaceDir, dir)
+		if !w.DryRun {
+			if err := os.MkdirAll(dirPath, 0755); err != nil {
+				return fmt.Errorf("failed to create directory %s: %w", dir, err)
+			}
+		}
+
+		// 4. Create symlinks
+		skillPath := filepath.Join(dirPath, "skills")
+		targetPath := filepath.Join("..", w.RepoDir, "skills")
+
+		// Replace any existing skills link or file in the managed assistant directory.
+		if _, err := os.Lstat(skillPath); err == nil {
+			fmt.Printf("Replacing existing %s...\n", skillPath)
+			if err := w.removePath(skillPath); err != nil {
+				return fmt.Errorf("failed to remove existing symlink %s: %w", skillPath, err)
+			}
+		}
+
+		if err := w.createSymlink(targetPath, skillPath); err != nil {
+			return err
+		}
+	}
+
+	if w.DryRun {
+		fmt.Println("\n[dry-run] Initialization complete. No changes made.")
+	} else {
+		fmt.Printf("Workspace initialization complete in %s.\n", workspaceDir)
+		fmt.Println("Run 'skillzeug show' to inspect the current configuration.")
+	}
+	return nil
 }

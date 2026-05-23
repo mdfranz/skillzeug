@@ -9,6 +9,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var showOpts struct {
+	repoDir string
+}
+
 var showCmd = &cobra.Command{
 	Use:   "show",
 	Short: "Show current workspace configuration and status",
@@ -18,31 +22,51 @@ var showCmd = &cobra.Command{
 		"  skillzeug show --dir sec-skillz",
 	}, "\n"),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runShow()
+		ws := NewWorkspace("")
+		ws.RepoDir = showOpts.repoDir
+
+		return ws.Show()
 	},
 }
 
 func init() {
 	rootCmd.AddCommand(showCmd)
-	showCmd.Flags().StringVarP(&repoDir, "dir", "d", "sec-skillz", "Directory for the submodule")
+	showCmd.Flags().StringVarP(&showOpts.repoDir, "dir", "d", "sec-skillz", "Directory for the submodule")
 }
 
-func runShowInDir(workspaceDir string) error {
-	normalizedRepoDir, err := validateRepoDir(repoDir)
+// Show resolves the workspace and runs the show configuration logic.
+func (w *Workspace) Show() error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to determine current directory: %w", err)
+	}
+
+	workspaceDir, err := w.resolveWorkspaceDir(cwd)
 	if err != nil {
 		return err
 	}
-	repoDir = normalizedRepoDir
+
+	w.Path = workspaceDir
+	return w.ShowInDir(workspaceDir)
+}
+
+// ShowInDir prints status information for the workspace directory.
+func (w *Workspace) ShowInDir(workspaceDir string) error {
+	normalizedRepoDir, err := validateRepoDir(w.RepoDir)
+	if err != nil {
+		return err
+	}
+	w.RepoDir = normalizedRepoDir
 
 	fmt.Println("Workspace Configuration Status:")
 	fmt.Println("-------------------------------")
 	fmt.Printf("Workspace root: %s\n", workspaceDir)
-	fmt.Printf("Managed submodule: %s\n\n", repoDir)
+	fmt.Printf("Managed submodule: %s\n\n", w.RepoDir)
 
 	// 1. Check Submodule
-	submodulePath := filepath.Join(workspaceDir, repoDir)
+	submodulePath := filepath.Join(workspaceDir, w.RepoDir)
 	if info, err := os.Stat(submodulePath); err == nil && info.IsDir() {
-		fmt.Printf("[✓] Submodule directory: %s\n", repoDir)
+		fmt.Printf("[✓] Submodule directory: %s\n", w.RepoDir)
 		// Check for skills subdir
 		skillsPath := filepath.Join(submodulePath, "skills")
 		if sInfo, sErr := os.Stat(skillsPath); sErr == nil && sInfo.IsDir() {
@@ -51,7 +75,7 @@ func runShowInDir(workspaceDir string) error {
 			fmt.Println("    [!] Skills directory MISSING inside submodule")
 		}
 	} else {
-		fmt.Printf("[ ] Submodule directory: %s (NOT FOUND)\n", repoDir)
+		fmt.Printf("[ ] Submodule directory: %s (NOT FOUND)\n", w.RepoDir)
 		fmt.Printf("    Run 'skillzeug init' to initialize\n")
 	}
 
@@ -85,18 +109,4 @@ func runShowInDir(workspaceDir string) error {
 	}
 
 	return nil
-}
-
-func runShow() error {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("failed to determine current directory: %w", err)
-	}
-
-	workspaceDir, err := resolveWorkspaceDir(cwd)
-	if err != nil {
-		return err
-	}
-
-	return runShowInDir(workspaceDir)
 }

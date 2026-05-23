@@ -6,16 +6,38 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+
+	"github.com/mattn/go-isatty"
 )
 
 var assistantDirs = []string{".gemini", ".codex", ".claude", ".agents"}
 
-var dryRun bool
+// Workspace encapsulates the environment and configuration for a skillzeug workspace operation.
+type Workspace struct {
+	Path        string
+	RepoURL     string
+	RepoBranch  string
+	RepoDir     string
+	Interactive bool
+	DryRun      bool
+	Force       bool
+	PruneDirs   bool
 
-var runCommand = realRunCommand
+	// Function pointers to allow stubbing in tests without mutating global variables.
+	runCmd       func(dir string, name string, args ...string) error
+	runCmdOutput func(dir string, name string, args ...string) ([]byte, error)
+}
 
-var runCommandOutput = realRunCommandOutput
+// NewWorkspace creates a new Workspace instance with real execution commands by default.
+func NewWorkspace(path string) *Workspace {
+	return &Workspace{
+		Path:         path,
+		runCmd:       realRunCommand,
+		runCmdOutput: realRunCommandOutput,
+	}
+}
 
 func realRunCommand(dir string, name string, args ...string) error {
 	cmd := exec.Command(name, args...)
@@ -42,6 +64,11 @@ func realRunCommandOutput(dir string, name string, args ...string) ([]byte, erro
 	}
 
 	return stdout.Bytes(), nil
+}
+
+// isInputTerminal checks if standard input is a terminal/TTY.
+func isInputTerminal() bool {
+	return isatty.IsTerminal(os.Stdin.Fd()) || isatty.IsCygwinTerminal(os.Stdin.Fd())
 }
 
 func validateRepoURL(url string) error {
@@ -84,8 +111,8 @@ func validateRepoDir(dir string) (string, error) {
 	return cleaned, nil
 }
 
-func gitTopLevel(dir string) (string, error) {
-	output, err := runCommandOutput(dir, "git", "rev-parse", "--show-toplevel")
+func (w *Workspace) gitTopLevel(dir string) (string, error) {
+	output, err := w.runCmdOutput(dir, "git", "rev-parse", "--show-toplevel")
 	if err != nil {
 		return "", err
 	}
@@ -93,8 +120,8 @@ func gitTopLevel(dir string) (string, error) {
 	return strings.TrimSpace(string(output)), nil
 }
 
-func resolveWorkspaceDir(cwd string) (string, error) {
-	root, err := gitTopLevel(cwd)
+func (w *Workspace) resolveWorkspaceDir(cwd string) (string, error) {
+	root, err := w.gitTopLevel(cwd)
 	if err == nil {
 		return root, nil
 	}
@@ -102,8 +129,8 @@ func resolveWorkspaceDir(cwd string) (string, error) {
 	return "", fmt.Errorf("not inside a git repository; run 'git init' first or 'skillzeug init' to initialize one")
 }
 
-func isConfiguredSubmodule(workspaceDir string, submoduleDir string) (bool, error) {
-	output, err := runCommandOutput(
+func (w *Workspace) isConfiguredSubmodule(workspaceDir string, submoduleDir string) (bool, error) {
+	output, err := w.runCmdOutput(
 		workspaceDir,
 		"git",
 		"config",
@@ -124,4 +151,43 @@ func isConfiguredSubmodule(workspaceDir string, submoduleDir string) (bool, erro
 	}
 
 	return false, nil
+}
+
+func (w *Workspace) runCommand(dir string, name string, args ...string) error {
+	if w.DryRun {
+		fmt.Printf("[dry-run] would run in %s: %s %s\n", dir, name, strings.Join(args, " "))
+		return nil
+	}
+	return w.runCmd(dir, name, args...)
+}
+
+func (w *Workspace) removePath(path string) error {
+	if w.DryRun {
+		fmt.Printf("[dry-run] would remove: %s\n", path)
+		return nil
+	}
+	return os.Remove(path)
+}
+
+func (w *Workspace) removeAllPath(path string) error {
+	if w.DryRun {
+		fmt.Printf("[dry-run] would remove recursively: %s\n", path)
+		return nil
+	}
+	return os.RemoveAll(path)
+}
+
+func (w *Workspace) createSymlink(target string, link string) error {
+	fmt.Printf("Creating symlink %s -> %s\n", link, target)
+	if w.DryRun {
+		return nil
+	}
+	err := os.Symlink(target, link)
+	if err != nil {
+		if runtime.GOOS == "windows" {
+			return fmt.Errorf("failed to create symlink: %w\nNote: On Windows, creating symlinks requires Administrator privileges or Developer Mode enabled.", err)
+		}
+		return fmt.Errorf("failed to create symlink %s: %w", link, err)
+	}
+	return nil
 }

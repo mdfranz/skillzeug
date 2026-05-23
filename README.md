@@ -14,7 +14,7 @@ Skillzeug is a Go CLI for setting up a shared `skills/` tree in a workspace. It 
 
 ### `init`
 
-Initializes the workspace. If `--repo` is omitted, Skillzeug opens an interactive prompt.
+Initializes the workspace. If `--repo` is omitted, Skillzeug opens an interactive prompt. In non-interactive environments (e.g., CI/CD or scripts where standard input is not a TTY), `--repo` is required.
 
 ```bash
 skillzeug init --repo git@github.com:org/skills.git
@@ -23,7 +23,7 @@ skillzeug init --repo https://github.com/org/skills.git --branch main --dir sec-
 
 Notes:
 
-- If the current directory is not inside a Git repository, Skillzeug offers to run `git init`.
+- If the current directory is not inside a Git repository, Skillzeug offers to run `git init` (in interactive mode). In non-interactive environments, this check fails with an error requiring manual repository setup.
 - If the target submodule path already exists and is not a configured submodule, initialization stops with an error instead of silently continuing.
 - Existing `skills` entries inside the managed assistant directories are replaced during initialization.
 
@@ -74,6 +74,7 @@ skillzeug delete --prune-dirs
 
 Notes:
 
+- In non-interactive environments, the confirmation prompt is skipped, and you must pass the `--force` flag; otherwise, the command will exit with an error.
 - By default, `delete` only removes the `skills` symlinks inside the assistant directories.
 - Use `--prune-dirs` to remove the entire `.codex`, `.gemini`, `.claude`, and `.agents` directories.
 

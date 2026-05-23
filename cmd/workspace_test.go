@@ -9,6 +9,7 @@ import (
 )
 
 func TestValidateRepoDir(t *testing.T) {
+	t.Parallel()
 	absolutePath := filepath.Join(string(filepath.Separator), "tmp", "skills")
 
 	tests := []struct {
@@ -42,46 +43,45 @@ func TestValidateRepoDir(t *testing.T) {
 }
 
 func TestRunDeleteInDirRejectsUnsafeRepoDir(t *testing.T) {
-	restore := stubCommandFns(
-		func(string, string, ...string) error {
+	t.Parallel()
+	ws := &Workspace{
+		RepoDir: "../danger",
+		runCmd: func(string, string, ...string) error {
 			t.Fatal("runCommand should not be called for an invalid repo dir")
 			return nil
 		},
-		func(string, string, ...string) ([]byte, error) {
+		runCmdOutput: func(string, string, ...string) ([]byte, error) {
 			t.Fatal("runCommandOutput should not be called for an invalid repo dir")
 			return nil, nil
 		},
-	)
-	defer restore()
+	}
 
-	repoDir = "../danger"
-
-	err := runDeleteInDir(t.TempDir())
+	err := ws.DeleteInDir(t.TempDir())
 	if err == nil {
 		t.Fatal("expected delete to reject repoDir traversal")
 	}
 }
 
 func TestRunInitInDirFailsWhenSubmoduleAddFails(t *testing.T) {
-	restore := stubCommandFns(
-		func(_ string, name string, args ...string) error {
+	t.Parallel()
+	workspaceDir := t.TempDir()
+	ws := &Workspace{
+		Path:       workspaceDir,
+		RepoURL:    "https://example.com/skills.git",
+		RepoBranch: "",
+		RepoDir:    "sec-skillz",
+		runCmd: func(_ string, name string, args ...string) error {
 			if name == "git" && len(args) >= 2 && args[0] == "submodule" && args[1] == "add" {
 				return errors.New("boom")
 			}
 			return nil
 		},
-		func(string, string, ...string) ([]byte, error) {
+		runCmdOutput: func(string, string, ...string) ([]byte, error) {
 			return nil, errors.New("no gitmodules")
 		},
-	)
-	defer restore()
+	}
 
-	repoURL = "https://example.com/skills.git"
-	repoBranch = ""
-	repoDir = "sec-skillz"
-
-	workspaceDir := t.TempDir()
-	err := runInitInDir(workspaceDir)
+	err := ws.InitInDir(workspaceDir)
 	if err == nil {
 		t.Fatal("expected initialization to fail when submodule add fails")
 	}
@@ -97,31 +97,31 @@ func TestRunInitInDirFailsWhenSubmoduleAddFails(t *testing.T) {
 }
 
 func TestRunInitInDirSkipsExistingSubmoduleAndScopesUpdate(t *testing.T) {
+	t.Parallel()
 	var commands []string
-	restore := stubCommandFns(
-		func(_ string, name string, args ...string) error {
+	workspaceDir := t.TempDir()
+	ws := &Workspace{
+		Path:       workspaceDir,
+		RepoURL:    "https://example.com/skills.git",
+		RepoBranch: "",
+		RepoDir:    "sec-skillz",
+		runCmd: func(_ string, name string, args ...string) error {
 			commands = append(commands, strings.Join(append([]string{name}, args...), " "))
 			return nil
 		},
-		func(_ string, name string, args ...string) ([]byte, error) {
+		runCmdOutput: func(_ string, name string, args ...string) ([]byte, error) {
 			if name == "git" && len(args) >= 5 && args[0] == "config" {
 				return []byte("submodule.skills.path sec-skillz\n"), nil
 			}
 			return nil, errors.New("unexpected command")
 		},
-	)
-	defer restore()
+	}
 
-	repoURL = "https://example.com/skills.git"
-	repoBranch = ""
-	repoDir = "sec-skillz"
-
-	workspaceDir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(workspaceDir, repoDir), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(workspaceDir, ws.RepoDir), 0755); err != nil {
 		t.Fatalf("failed to create submodule dir: %v", err)
 	}
 
-	if err := runInitInDir(workspaceDir); err != nil {
+	if err := ws.InitInDir(workspaceDir); err != nil {
 		t.Fatalf("initialization failed: %v", err)
 	}
 
@@ -144,17 +144,15 @@ func TestRunInitInDirSkipsExistingSubmoduleAndScopesUpdate(t *testing.T) {
 }
 
 func TestResolveWorkspaceDirUsesGitTopLevel(t *testing.T) {
+	t.Parallel()
 	rootDir := t.TempDir()
 	subDir := filepath.Join(rootDir, "nested", "project")
 	if err := os.MkdirAll(subDir, 0755); err != nil {
 		t.Fatalf("failed to create subdir: %v", err)
 	}
 
-	restore := stubCommandFns(
-		func(string, string, ...string) error {
-			return nil
-		},
-		func(dir string, name string, args ...string) ([]byte, error) {
+	ws := &Workspace{
+		runCmdOutput: func(dir string, name string, args ...string) ([]byte, error) {
 			if dir != subDir {
 				t.Fatalf("gitTopLevel called with dir %q, want %q", dir, subDir)
 			}
@@ -163,10 +161,9 @@ func TestResolveWorkspaceDirUsesGitTopLevel(t *testing.T) {
 			}
 			return []byte(rootDir + "\n"), nil
 		},
-	)
-	defer restore()
+	}
 
-	got, err := resolveWorkspaceDir(subDir)
+	got, err := ws.resolveWorkspaceDir(subDir)
 	if err != nil {
 		t.Fatalf("resolveWorkspaceDir returned error: %v", err)
 	}
@@ -176,19 +173,16 @@ func TestResolveWorkspaceDirUsesGitTopLevel(t *testing.T) {
 }
 
 func TestResolveWorkspaceDirReturnsErrorWhenGitFails(t *testing.T) {
+	t.Parallel()
 	workDir := t.TempDir()
 
-	restore := stubCommandFns(
-		func(string, string, ...string) error {
-			return errors.New("git not found")
-		},
-		func(string, string, ...string) ([]byte, error) {
+	ws := &Workspace{
+		runCmdOutput: func(string, string, ...string) ([]byte, error) {
 			return nil, errors.New("git not found")
 		},
-	)
-	defer restore()
+	}
 
-	_, err := resolveWorkspaceDir(workDir)
+	_, err := ws.resolveWorkspaceDir(workDir)
 	if err == nil {
 		t.Fatal("expected resolveWorkspaceDir to return error when git fails")
 	}
@@ -198,6 +192,7 @@ func TestResolveWorkspaceDirReturnsErrorWhenGitFails(t *testing.T) {
 }
 
 func TestValidateRepoURL(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		input   string
@@ -226,20 +221,5 @@ func TestValidateRepoURL(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: unexpected error: %v", tt.name, err)
 		}
-	}
-}
-
-func stubCommandFns(
-	run func(string, string, ...string) error,
-	output func(string, string, ...string) ([]byte, error),
-) func() {
-	originalRun := runCommand
-	originalOutput := runCommandOutput
-	runCommand = run
-	runCommandOutput = output
-
-	return func() {
-		runCommand = originalRun
-		runCommandOutput = originalOutput
 	}
 }

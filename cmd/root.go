@@ -9,12 +9,6 @@ import (
 
 const Version = "0.1.0"
 
-var (
-	repoURL    string
-	repoBranch string
-	repoDir    string
-)
-
 var rootCmd = &cobra.Command{
 	Use:           "skillzeug",
 	Short:         "Manage workspace skill submodules and assistant directories",
